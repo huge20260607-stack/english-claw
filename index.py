@@ -59,7 +59,7 @@ FORCE_TARGET = os.environ.get("FORCE_TARGET", "").strip()
 
 # ── 推送时刻守门（北京时间）──────────────────────────────────
 PUSH_TZ_OFFSET = int(os.environ.get("PUSH_TZ_OFFSET", "8"))      # 北京时间 = UTC+8
-PUSH_TOLERANCE_MIN = int(os.environ.get("PUSH_TOLERANCE_MIN", "10"))
+PUSH_TOLERANCE_MIN = int(os.environ.get("PUSH_TOLERANCE_MIN", "20"))
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 TOPICS_FILE = os.path.join(_HERE, "topics.json")

@@ -57,6 +57,7 @@ jobs:
           WORDS_PER_DAY: '5'
           DIVERSITY_DECAY: '0.02'
           SHOW_HINTS: '1'
+          PUSH_TOLERANCE_MIN: '20'
           FORCE_SEND: ${{ github.event.inputs.force_send || '0' }}
           FORCE_TARGET: ${{ github.event.inputs.force_target || '' }}
         run: python index.py
