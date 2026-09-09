@@ -59,12 +59,15 @@ FORCE_TARGET = os.environ.get("FORCE_TARGET", "").strip()
 
 # ── 推送时刻守门（北京时间）──────────────────────────────────
 PUSH_TZ_OFFSET = int(os.environ.get("PUSH_TZ_OFFSET", "8"))      # 北京时间 = UTC+8
+# 容错窗口：GitHub Actions cron 可能延迟 5-15 分钟触发，窗口设大一点容忍延迟。
+# 防重复靠 .sent-flag 去重文件（git commit 回仓库），不靠窗口大小。
 PUSH_TOLERANCE_MIN = int(os.environ.get("PUSH_TOLERANCE_MIN", "20"))
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 TOPICS_FILE = os.path.join(_HERE, "topics.json")
 LEGACY_VOCAB_FILE = os.path.join(_HERE, "vocab.json")
 HOLIDAYS_FILE = os.path.join(_HERE, "holidays.json")
+SENT_FLAGS_DIR = os.path.join(_HERE, ".sent-flags")
 
 
 def _beijing_now():
@@ -110,11 +113,41 @@ def _in_window(now_bj, hour, minute):
     """是否落在某群的推送窗口 [hour:minute, +PUSH_TOLERANCE_MIN)。
 
     GitHub Actions 的 cron 可能延迟 5-15 分钟触发，
-    所以留 10 分钟容错窗口。
+    所以留容错窗口容忍延迟。
     """
     if now_bj.hour != hour:
         return False
     return minute <= now_bj.minute < minute + PUSH_TOLERANCE_MIN
+
+
+def _flag_path(date_str, group_name):
+    """去重标记文件路径：.sent-flags/2026-09-09_LSBG-OBD海外业务部.flag"""
+    safe = group_name.replace("/", "_").replace(" ", "_")
+    return os.path.join(SENT_FLAGS_DIR, f"{date_str}_{safe}.flag")
+
+
+def _already_sent(date_str, group_name):
+    """检查某群今天是否已发送过。"""
+    return os.path.exists(_flag_path(date_str, group_name))
+
+
+def _mark_sent(date_str, group_name):
+    """标记某群今天已发送，并 git commit 回仓库（供下次触发检查）。"""
+    os.makedirs(SENT_FLAGS_DIR, exist_ok=True)
+    path = _flag_path(date_str, group_name)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(datetime.now(timezone.utc).isoformat() + "\n")
+    # 尝试 git commit（失败不阻塞，最坏情况是重复发）
+    import subprocess
+    try:
+        subprocess.run(["git", "add", path], cwd=_HERE, timeout=5, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", f"sent: {date_str} {group_name}"],
+            cwd=_HERE, timeout=5, capture_output=True
+        )
+        subprocess.run(["git", "push"], cwd=_HERE, timeout=15, capture_output=True)
+    except Exception:
+        pass
 
 
 def _load_holidays():
@@ -285,13 +318,22 @@ def run():
         print(json.dumps(base, ensure_ascii=False))
         return 0
 
-    # ── 闸门 2：逐个群判断其推送时刻 ──────────────────────────
+    # ── 确定要发哪些群 ────────────────────────────────────────
+    # GitHub Actions 的每个 cron 对应一个群，触发即发，不做时间窗口判断。
+    # FORCE_SEND（手动触发）时发全部群或指定群。
+    # 定时触发时发当前时刻最近的那个群（容错窗口内）。
     due = []
-    for t in targets:
-        if FORCE_TARGET and t["name"] != FORCE_TARGET:
-            continue
-        if FORCE_SEND or _in_window(now_bj, t["hour"], t["minute"]):
+    if FORCE_SEND:
+        # 手动触发：发全部群或指定群
+        for t in targets:
+            if FORCE_TARGET and t["name"] != FORCE_TARGET:
+                continue
             due.append(t)
+    else:
+        # 定时触发：找到当前时刻容错窗口内匹配的群
+        for t in targets:
+            if _in_window(now_bj, t["hour"], t["minute"]):
+                due.append(t)
 
     if not due:
         base.update({
@@ -310,11 +352,20 @@ def run():
     title = f"今日 {len(entries)} 词 · English Claw"
     md = message.build(entries, date_str=now_bj.strftime("%Y-%m-%d"), show_hints=SHOW_HINTS)
 
-    # ── 逐群发送 ──────────────────────────────────────────────
-    sent_to, failed = [], []
+    # ── 逐群发送（带去重：检查当天是否已发过）──────────────────
+    date_str = now_bj.strftime("%Y-%m-%d")
+    sent_to, failed, skipped_dup = [], [], []
     for t in due:
+        if not FORCE_SEND and _already_sent(date_str, t["name"]):
+            skipped_dup.append(t["name"])
+            print("[skip] %s -> already sent today" % t["name"])
+            continue
         ok = dingtalk.send(t["webhook"], t["secret"], title, md)
-        (sent_to if ok else failed).append(t["name"])
+        if ok:
+            sent_to.append(t["name"])
+            _mark_sent(date_str, t["name"])
+        else:
+            failed.append(t["name"])
         print("[send] %s -> %s" % (t["name"], "ok" if ok else "FAILED"))
 
     base.update({
@@ -323,6 +374,7 @@ def run():
         "day_type": day_type,
         "sent_to": sent_to,
         "failed_to": failed,
+        "skipped_dup": skipped_dup,
         "words": [{"topic": e["topic"], "word": e["word"]} for e in entries],
     })
     print(json.dumps(base, ensure_ascii=False))

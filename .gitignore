@@ -4,3 +4,4 @@ __pycache__/
 *.json.tmp
 targets.txt
 fc-env.json
+set_secret.py
