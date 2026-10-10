@@ -25,9 +25,15 @@ name: English Claw Daily Words
 on:
   schedule:
     # 三个群的推送时刻（UTC，= 北京时间 - 8h）
-    - cron: '0 1 * * *'    # 北京 09:00 → LSBG-OBD海外业务部
-    - cron: '30 3 * * *'   # 北京 11:30 → 海外英语能力提升
-    - cron: '30 9 * * *'   # 北京 17:30 → 海外设计
+    # 主 cron + 兜底 cron（延迟 30 分钟），配合 .sent-flags 去重：
+    # 第一次触发发了 → 创建 flag 文件 → 兜底 cron 触发时检查到 flag 自动跳过
+    # 第一次漏触发或延迟超窗口 → 兜底 cron 补发
+    - cron: '0 1 * * *'    # 北京 09:00 → LSBG-OBD海外业务部（主）
+    - cron: '30 1 * * *'   # 北京 09:30 → LSBG-OBD海外业务部（兜底）
+    - cron: '30 3 * * *'   # 北京 11:30 → 海外英语能力提升（主）
+    - cron: '0 4 * * *'    # 北京 12:00 → 海外英语能力提升（兜底）
+    - cron: '30 9 * * *'   # 北京 17:30 → 海外设计（主）
+    - cron: '0 10 * * *'   # 北京 18:00 → 海外设计（兜底）
   # 手动触发（测试用）
   workflow_dispatch:
     inputs:
@@ -74,4 +80,13 @@ jobs:
           SHOW_HINTS: '1'
           FORCE_SEND: ${{ github.event.inputs.force_send || '0' }}
           FORCE_TARGET: ${{ github.event.inputs.force_target || '' }}
+          # 每个 cron 通过 schedule 表达式映射到具体群名
+          # cron 触发即发对应群，不做时间窗口判断，靠 .sent-flags 去重
+          PUSH_TARGET: ${{ github.event.schedule == '0 1 * * *' && 'LSBG-OBD海外业务部'
+                       || github.event.schedule == '30 1 * * *' && 'LSBG-OBD海外业务部'
+                       || github.event.schedule == '30 3 * * *' && '海外英语能力提升'
+                       || github.event.schedule == '0 4 * * *' && '海外英语能力提升'
+                       || github.event.schedule == '30 9 * * *' && '海外设计'
+                       || github.event.schedule == '0 10 * * *' && '海外设计'
+                       || '' }}
         run: python index.py

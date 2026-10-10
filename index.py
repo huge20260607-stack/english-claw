@@ -56,12 +56,16 @@ DIVERSITY_DECAY = float(os.environ.get("DIVERSITY_DECAY", "0.02"))
 SHOW_HINTS = os.environ.get("SHOW_HINTS", "1") not in ("0", "false", "False", "no", "")
 FORCE_SEND = os.environ.get("FORCE_SEND", "0") not in ("0", "false", "False", "no", "")
 FORCE_TARGET = os.environ.get("FORCE_TARGET", "").strip()
+PUSH_TARGET = os.environ.get("PUSH_TARGET", "").strip()  # cron 指定要发的群名
 
 # ── 推送时刻守门（北京时间）──────────────────────────────────
 PUSH_TZ_OFFSET = int(os.environ.get("PUSH_TZ_OFFSET", "8"))      # 北京时间 = UTC+8
-# 容错窗口：GitHub Actions cron 可能延迟 5-15 分钟触发，窗口设大一点容忍延迟。
-# 防重复靠 .sent-flag 去重文件（git commit 回仓库），不靠窗口大小。
-PUSH_TOLERANCE_MIN = int(os.environ.get("PUSH_TOLERANCE_MIN", "20"))
+# 容错窗口：GitHub Actions cron 可能延迟 5-30 分钟触发。
+# 主 cron + 兜底 cron（延迟 30 分钟）双保险，窗口设 35 分钟：
+# 主 cron 在 [mm, mm+35) 内命中 → 发送 + 写 flag → 兜底 cron 命中但 flag 已存在 → 跳过
+# 主 cron 漏触发或延迟超窗口 → 兜底 cron 在 [mm+30, mm+65) 内命中 → 补发
+# 三个群间隔 ≥ 2.5h，窗口 35 分钟远小于间隔，不会跨群误命中。
+PUSH_TOLERANCE_MIN = int(os.environ.get("PUSH_TOLERANCE_MIN", "35"))
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 TOPICS_FILE = os.path.join(_HERE, "topics.json")
@@ -319,9 +323,10 @@ def run():
         return 0
 
     # ── 确定要发哪些群 ────────────────────────────────────────
-    # GitHub Actions 的每个 cron 对应一个群，触发即发，不做时间窗口判断。
-    # FORCE_SEND（手动触发）时发全部群或指定群。
-    # 定时触发时发当前时刻最近的那个群（容错窗口内）。
+    # 三种模式：
+    # 1. FORCE_SEND（手动触发）：发全部群或 FORCE_TARGET 指定群
+    # 2. PUSH_TARGET（cron 指定）：直接发 PUSH_TARGET 指定群，不做时间窗口判断
+    # 3. 回退：用时间窗口匹配（兼容旧配置）
     due = []
     if FORCE_SEND:
         # 手动触发：发全部群或指定群
@@ -329,8 +334,13 @@ def run():
             if FORCE_TARGET and t["name"] != FORCE_TARGET:
                 continue
             due.append(t)
+    elif PUSH_TARGET:
+        # cron 指定群：直接发，不守门时刻
+        for t in targets:
+            if t["name"] == PUSH_TARGET:
+                due.append(t)
     else:
-        # 定时触发：找到当前时刻容错窗口内匹配的群
+        # 回退：用时间窗口匹配
         for t in targets:
             if _in_window(now_bj, t["hour"], t["minute"]):
                 due.append(t)
