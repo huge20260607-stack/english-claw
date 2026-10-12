@@ -323,39 +323,34 @@ def run():
         return 0
 
     # ── 确定要发哪些群 ────────────────────────────────────────
-    # 三种模式：
+    # 两种模式：
     # 1. FORCE_SEND（手动触发）：发全部群或 FORCE_TARGET 指定群
-    # 2. PUSH_TARGET（cron 指定）：直接发 PUSH_TARGET 指定群，不做时间窗口判断
-    # 3. 回退：用时间窗口匹配（兼容旧配置）
+    # 2. 定时触发：扫描所有群，当前北京时间已到该群的推送时刻且当天没发过的 → 发
+    #    这样即使 cron 延迟几小时，到下一次整点触发时也能补发当天还没发的群。
     due = []
+    date_str_now = now_bj.strftime("%Y-%m-%d")
     if FORCE_SEND:
-        # 手动触发：发全部群或指定群
         for t in targets:
             if FORCE_TARGET and t["name"] != FORCE_TARGET:
                 continue
             due.append(t)
-    elif PUSH_TARGET:
-        # cron 指定群：两种情况都发
-        # 1. 当天还没发过（flag 不存在）→ 直接发（即使 cron 延迟超过窗口也补发）
-        # 2. 已发过 → 跳过（去重）
-        # 但防止跨午夜误发：凌晨 0-6 点不补发昨天的延迟触发
-        date_str_now = now_bj.strftime("%Y-%m-%d")
-        for t in targets:
-            if t["name"] == PUSH_TARGET:
-                if _already_sent(date_str_now, t["name"]):
-                    skipped_dup.append(t["name"])
-                    print("[skip] %s -> already sent today" % t["name"])
-                    continue
-                # 防跨午夜：凌晨 0-6 点不补发（可能是昨天的延迟触发）
-                if now_bj.hour < 6:
-                    print("[skip] %s -> early morning, likely yesterday's delayed trigger" % t["name"])
-                    continue
-                due.append(t)
     else:
-        # 回退：用时间窗口匹配
+        # 定时触发：扫描所有群
+        now_min = now_bj.hour * 60 + now_bj.minute
         for t in targets:
-            if _in_window(now_bj, t["hour"], t["minute"]):
-                due.append(t)
+            push_min = t["hour"] * 60 + t["minute"]
+            # 当前时间已到该群的推送时刻
+            if now_min < push_min:
+                continue  # 还没到点
+            # 防跨午夜：凌晨 0-6 点不补发（可能是昨天的延迟触发）
+            if now_bj.hour < 6:
+                continue
+            # 当天已发过 → 跳过（去重）
+            if _already_sent(date_str_now, t["name"]):
+                skipped_dup.append(t["name"])
+                print("[skip] %s -> already sent today" % t["name"])
+                continue
+            due.append(t)
 
     if not due:
         base.update({

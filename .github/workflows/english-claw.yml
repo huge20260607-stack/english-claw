@@ -24,16 +24,24 @@ name: English Claw Daily Words
 
 on:
   schedule:
-    # 三个群的推送时刻（UTC，= 北京时间 - 8h）
-    # 主 cron + 兜底 cron（延迟 30 分钟），配合 .sent-flags 去重：
-    # 第一次触发发了 → 创建 flag 文件 → 兜底 cron 触发时检查到 flag 自动跳过
-    # 第一次漏触发或延迟超窗口 → 兜底 cron 补发
-    - cron: '0 1 * * *'    # 北京 09:00 → LSBG-OBD海外业务部（主）
-    - cron: '30 1 * * *'   # 北京 09:30 → LSBG-OBD海外业务部（兜底）
-    - cron: '30 3 * * *'   # 北京 11:30 → 海外英语能力提升（主）
-    - cron: '0 4 * * *'    # 北京 12:00 → 海外英语能力提升（兜底）
-    - cron: '30 9 * * *'   # 北京 17:30 → 海外设计（主）
-    - cron: '0 10 * * *'   # 北京 18:00 → 海外设计（兜底）
+    # 每小时整点触发一次（UTC 0-16 点 = 北京 08:00-24:00）
+    # 代码层判断当前该发哪个群，没发过就发，发过了就跳过。
+    # 用每小时触发代替精确时刻触发：GitHub Actions 对整点 cron 触发率更高，
+    # 且即使延迟 1-2 小时，下次整点触发时也能补发当天还没发的群。
+    #
+    # 不在 UTC 17-23（北京 01:00-07:00）触发：凌晨不补发（防跨午夜误发）。
+    - cron: '0 0 * * *'    # 北京 08:00
+    - cron: '0 1 * * *'    # 北京 09:00
+    - cron: '0 2 * * *'    # 北京 10:00
+    - cron: '0 3 * * *'    # 北京 11:00
+    - cron: '0 4 * * *'    # 北京 12:00
+    - cron: '0 5 * * *'    # 北京 13:00
+    - cron: '0 6 * * *'    # 北京 14:00
+    - cron: '0 7 * * *'    # 北京 15:00
+    - cron: '0 8 * * *'    # 北京 16:00
+    - cron: '0 9 * * *'    # 北京 17:00
+    - cron: '0 10 * * *'   # 北京 18:00
+    - cron: '0 11 * * *'   # 北京 19:00
   # 手动触发（测试用）
   workflow_dispatch:
     inputs:
@@ -46,8 +54,9 @@ on:
         type: string
         default: ''
 
-# 去重：GitHub Actions 对同一个 cron 可能触发两次（间隔约 10 分钟）。
-# 用 concurrency 按 cron 表达式分组，同一 cron 的第二次触发会被取消。
+# 去重：concurrency 按 schedule 表达式分组。
+# 同一个 cron 的重复触发会排队（cancel-in-progress: false），不会互相取消。
+# 不同 cron 各自独立运行。
 concurrency:
   group: english-claw-${{ github.event.schedule || 'manual' }}
   cancel-in-progress: false
@@ -80,13 +89,6 @@ jobs:
           SHOW_HINTS: '1'
           FORCE_SEND: ${{ github.event.inputs.force_send || '0' }}
           FORCE_TARGET: ${{ github.event.inputs.force_target || '' }}
-          # 每个 cron 通过 schedule 表达式映射到具体群名
-          # cron 触发即发对应群，不做时间窗口判断，靠 .sent-flags 去重
-          PUSH_TARGET: ${{ github.event.schedule == '0 1 * * *' && 'LSBG-OBD海外业务部'
-                       || github.event.schedule == '30 1 * * *' && 'LSBG-OBD海外业务部'
-                       || github.event.schedule == '30 3 * * *' && '海外英语能力提升'
-                       || github.event.schedule == '0 4 * * *' && '海外英语能力提升'
-                       || github.event.schedule == '30 9 * * *' && '海外设计'
-                       || github.event.schedule == '0 10 * * *' && '海外设计'
-                       || '' }}
+          # 不再通过 PUSH_TARGET 指定群名。
+          # 代码层自动判断当前时间该发哪个群（已到点但当天没发过的群）。
         run: python index.py
