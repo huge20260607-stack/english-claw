@@ -335,18 +335,22 @@ def run():
                 continue
             due.append(t)
     elif PUSH_TARGET:
-        # cron 指定群：检查当前时间是否在该群的合理推送窗口内。
-        # 窗口 = [群时刻, 群时刻+2h)，容忍 cron 延迟，但防止跨午夜误发。
-        # 例如海外设计 17:30，窗口 [17:30, 19:30)，00:01 不在窗口内 → 跳过。
+        # cron 指定群：两种情况都发
+        # 1. 当天还没发过（flag 不存在）→ 直接发（即使 cron 延迟超过窗口也补发）
+        # 2. 已发过 → 跳过（去重）
+        # 但防止跨午夜误发：凌晨 0-6 点不补发昨天的延迟触发
+        date_str_now = now_bj.strftime("%Y-%m-%d")
         for t in targets:
             if t["name"] == PUSH_TARGET:
-                push_min = t["hour"] * 60 + t["minute"]
-                now_min = now_bj.hour * 60 + now_bj.minute
-                if now_min >= push_min and now_min < push_min + 120:
-                    due.append(t)
-                else:
-                    print("[skip] %s -> outside push window (now %02d:%02d, expected %02d:%02d+2h)" % (
-                        t["name"], now_bj.hour, now_bj.minute, t["hour"], t["minute"]))
+                if _already_sent(date_str_now, t["name"]):
+                    skipped_dup.append(t["name"])
+                    print("[skip] %s -> already sent today" % t["name"])
+                    continue
+                # 防跨午夜：凌晨 0-6 点不补发（可能是昨天的延迟触发）
+                if now_bj.hour < 6:
+                    print("[skip] %s -> early morning, likely yesterday's delayed trigger" % t["name"])
+                    continue
+                due.append(t)
     else:
         # 回退：用时间窗口匹配
         for t in targets:
