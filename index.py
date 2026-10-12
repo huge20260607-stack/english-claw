@@ -136,22 +136,46 @@ def _already_sent(date_str, group_name):
 
 
 def _mark_sent(date_str, group_name):
-    """标记某群今天已发送，并 git commit 回仓库（供下次触发检查）。"""
+    """标记某群今天已发送，并 git commit+push 回仓库（供下次触发检查）。"""
     os.makedirs(SENT_FLAGS_DIR, exist_ok=True)
     path = _flag_path(date_str, group_name)
     with open(path, "w", encoding="utf-8") as f:
         f.write(datetime.now(timezone.utc).isoformat() + "\n")
-    # 尝试 git commit（失败不阻塞，最坏情况是重复发）
     import subprocess
     try:
+        # 用 GH_PAT 配置认证 remote URL，确保 push 有权限
+        gh_pat = os.environ.get("GH_PAT", "")
+        if gh_pat:
+            remote_url = subprocess.run(
+                ["git", "remote", "get-url", "origin"],
+                cwd=_HERE, timeout=5, capture_output=True, text=True
+            ).stdout.strip()
+            if "https://github.com" in remote_url and "@" not in remote_url:
+                auth_url = remote_url.replace(
+                    "https://github.com",
+                    f"https://x-access-token:{gh_pat}@github.com"
+                )
+                subprocess.run(
+                    ["git", "remote", "set-url", "origin", auth_url],
+                    cwd=_HERE, timeout=5, capture_output=True
+                )
         subprocess.run(["git", "add", path], cwd=_HERE, timeout=5, capture_output=True)
-        subprocess.run(
+        commit_result = subprocess.run(
             ["git", "commit", "-m", f"sent: {date_str} {group_name}"],
-            cwd=_HERE, timeout=5, capture_output=True
+            cwd=_HERE, timeout=5, capture_output=True, text=True
         )
-        subprocess.run(["git", "push"], cwd=_HERE, timeout=15, capture_output=True)
-    except Exception:
-        pass
+        if commit_result.returncode != 0 and "nothing to commit" not in commit_result.stdout:
+            print("[warn] git commit failed: %s" % commit_result.stderr.strip())
+        push_result = subprocess.run(
+            ["git", "push", "origin", "main"],
+            cwd=_HERE, timeout=30, capture_output=True, text=True
+        )
+        if push_result.returncode != 0:
+            print("[warn] git push failed: %s" % push_result.stderr.strip())
+        else:
+            print("[ok] flag pushed: %s %s" % (date_str, group_name))
+    except Exception as e:
+        print("[warn] _mark_sent git push error: %s" % e)
 
 
 def _load_holidays():
@@ -370,10 +394,11 @@ def run():
     md = message.build(entries, date_str=now_bj.strftime("%Y-%m-%d"), show_hints=SHOW_HINTS)
 
     # ── 逐群发送（带去重：检查当天是否已发过）──────────────────
+    # 即使 FORCE_SEND=true 也检查去重，防止手动补发后 cron 触发重复发
     date_str = now_bj.strftime("%Y-%m-%d")
     sent_to, failed, skipped_dup = [], [], []
     for t in due:
-        if not FORCE_SEND and _already_sent(date_str, t["name"]):
+        if _already_sent(date_str, t["name"]):
             skipped_dup.append(t["name"])
             print("[skip] %s -> already sent today" % t["name"])
             continue

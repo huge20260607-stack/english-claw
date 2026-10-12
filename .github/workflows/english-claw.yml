@@ -89,6 +89,8 @@ jobs:
           SHOW_HINTS: '1'
           FORCE_SEND: ${{ github.event.inputs.force_send || '0' }}
           FORCE_TARGET: ${{ github.event.inputs.force_target || '' }}
+          # GH_PAT 用于 _mark_sent 里的 git push 认证
+          GH_PAT: ${{ secrets.GH_PAT }}
           # 不再通过 PUSH_TARGET 指定群名。
           # 代码层自动判断当前时间该发哪个群（已到点但当天没发过的群）。
         run: python index.py
