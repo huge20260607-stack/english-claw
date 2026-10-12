@@ -335,10 +335,18 @@ def run():
                 continue
             due.append(t)
     elif PUSH_TARGET:
-        # cron 指定群：直接发，不守门时刻
+        # cron 指定群：检查当前时间是否在该群的合理推送窗口内。
+        # 窗口 = [群时刻, 群时刻+2h)，容忍 cron 延迟，但防止跨午夜误发。
+        # 例如海外设计 17:30，窗口 [17:30, 19:30)，00:01 不在窗口内 → 跳过。
         for t in targets:
             if t["name"] == PUSH_TARGET:
-                due.append(t)
+                push_min = t["hour"] * 60 + t["minute"]
+                now_min = now_bj.hour * 60 + now_bj.minute
+                if now_min >= push_min and now_min < push_min + 120:
+                    due.append(t)
+                else:
+                    print("[skip] %s -> outside push window (now %02d:%02d, expected %02d:%02d+2h)" % (
+                        t["name"], now_bj.hour, now_bj.minute, t["hour"], t["minute"]))
     else:
         # 回退：用时间窗口匹配
         for t in targets:
