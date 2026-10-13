@@ -24,24 +24,14 @@ name: English Claw Daily Words
 
 on:
   schedule:
-    # 每小时非整点触发（UTC 0-11 点 = 北京 08:00-20:00）
-    # 关键：不用整点 0 分！GitHub Actions 整点是高负载时段，36% 的 cron 会被丢弃。
-    # 用 10 分避开最拥挤的整点窗口。
-    # 代码层判断当前该发哪个群，没发过就发，发过了就跳过。
-    #
-    # 不在 UTC 17-23（北京 01:00-07:00）触发：凌晨不补发（防跨午夜误发）。
-    - cron: '10 0 * * *'   # 北京 08:10
-    - cron: '10 1 * * *'   # 北京 09:10
-    - cron: '10 2 * * *'   # 北京 10:10
-    - cron: '10 3 * * *'   # 北京 11:10
-    - cron: '10 4 * * *'   # 北京 12:10
-    - cron: '10 5 * * *'   # 北京 13:10
-    - cron: '10 6 * * *'   # 北京 14:10
-    - cron: '10 7 * * *'   # 北京 15:10
-    - cron: '10 8 * * *'   # 北京 16:10
-    - cron: '10 9 * * *'   # 北京 17:10
-    - cron: '10 10 * * *'  # 北京 18:10
-    - cron: '10 11 * * *'  # 北京 19:10
+    # 3 个 cron，对应三个群的推送时刻（UTC = 北京 -8h）
+    # 精简 cron 数量：12 个 cron 可能触发 GitHub 的 schedule 总量限制，
+    # 且频繁 push sent-flags 会导致 schedule 反复重新注册。
+    # 3 个 cron + 代码层补发逻辑（到点没发过就发）足够覆盖。
+    # 用 10 分避开整点高负载。
+    - cron: '10 1 * * *'   # 北京 09:10 → LSBG 到点（+补发之前漏的）
+    - cron: '10 4 * * *'   # 北京 12:10 → 海外英语到点（+补发之前漏的）
+    - cron: '10 9 * * *'   # 北京 17:10 → 海外设计到点（+补发之前漏的）
   # 手动触发（测试用）
   workflow_dispatch:
     inputs:
@@ -68,13 +58,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GH_PAT || github.token }}
 
-      - name: Configure git for push
-        run: |
-          git config user.name "english-claw-bot"
-          git config user.email "actions@github.com"
+      - name: Restore sent-flags cache
+        uses: actions/cache@v4
+        with:
+          path: .sent-flags
+          key: sent-flags-${{ github.run_id }}
+          restore-keys: |
+            sent-flags-
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -89,8 +80,11 @@ jobs:
           SHOW_HINTS: '1'
           FORCE_SEND: ${{ github.event.inputs.force_send || '0' }}
           FORCE_TARGET: ${{ github.event.inputs.force_target || '' }}
-          # GH_PAT 用于 _mark_sent 里的 git push 认证
-          GH_PAT: ${{ secrets.GH_PAT }}
-          # 不再通过 PUSH_TARGET 指定群名。
-          # 代码层自动判断当前时间该发哪个群（已到点但当天没发过的群）。
         run: python index.py
+
+      - name: Save sent-flags cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .sent-flags
+          key: sent-flags-${{ github.run_id }}
