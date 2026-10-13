@@ -29,11 +29,13 @@ English Claw · 每日单词推送（GitHub Actions 版）
   FORCE_TARGET       选填：只发指定群（手动测试用，配合 FORCE_SEND=1）
 
 GitHub Actions workflow 配置：
-  每个 cron 表达式对应一个群的北京时间推送时刻：
-    LSBG-OBD海外业务部  北京 09:00 → UTC 01:00 → '0 1 * * *'
-    海外英语能力提升      北京 11:30 → UTC 03:30 → '30 3 * * *'
-    海外设计            北京 17:30 → UTC 09:30 → '30 9 * * *'
-  代码层再守门确认时刻匹配，防止 cron 延迟导致误发。
+  3 个 cron 对应三个群的推送时刻（UTC = 北京 -8h）：
+    LSBG-OBD海外业务部  北京 09:10 → UTC 01:10 → '10 1 * * *'
+    海外英语能力提升      北京 12:10 → UTC 04:10 → '10 4 * * *'
+    海外设计             北京 17:10 → UTC 09:10 → '10 9 * * *'
+  代码层自动判断该发哪个群：当前时间已到该群推送时刻且当天没发过的 → 发。
+  即使 cron 延迟，下一个 cron 触发时也能补发当天还没发的群。
+  去重靠 .sent-flags/ 目录 + GitHub Actions cache 持久化。
 
 同包资源：
   topics.json   主题化词库（职场 / 生活 / 出差 / 海外 / 电力营销 / 电力采集）
@@ -56,16 +58,9 @@ DIVERSITY_DECAY = float(os.environ.get("DIVERSITY_DECAY", "0.02"))
 SHOW_HINTS = os.environ.get("SHOW_HINTS", "1") not in ("0", "false", "False", "no", "")
 FORCE_SEND = os.environ.get("FORCE_SEND", "0") not in ("0", "false", "False", "no", "")
 FORCE_TARGET = os.environ.get("FORCE_TARGET", "").strip()
-PUSH_TARGET = os.environ.get("PUSH_TARGET", "").strip()  # cron 指定要发的群名
 
-# ── 推送时刻守门（北京时间）──────────────────────────────────
+# ── 时区 ─────────────────────────────────────────────────────
 PUSH_TZ_OFFSET = int(os.environ.get("PUSH_TZ_OFFSET", "8"))      # 北京时间 = UTC+8
-# 容错窗口：GitHub Actions cron 可能延迟 5-30 分钟触发。
-# 主 cron + 兜底 cron（延迟 30 分钟）双保险，窗口设 35 分钟：
-# 主 cron 在 [mm, mm+35) 内命中 → 发送 + 写 flag → 兜底 cron 命中但 flag 已存在 → 跳过
-# 主 cron 漏触发或延迟超窗口 → 兜底 cron 在 [mm+30, mm+65) 内命中 → 补发
-# 三个群间隔 ≥ 2.5h，窗口 35 分钟远小于间隔，不会跨群误命中。
-PUSH_TOLERANCE_MIN = int(os.environ.get("PUSH_TOLERANCE_MIN", "35"))
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 TOPICS_FILE = os.path.join(_HERE, "topics.json")
@@ -111,17 +106,6 @@ def _load_targets():
     except Exception as e:
         print("[error] TARGETS 解析失败: %s" % e)
         return []
-
-
-def _in_window(now_bj, hour, minute):
-    """是否落在某群的推送窗口 [hour:minute, +PUSH_TOLERANCE_MIN)。
-
-    GitHub Actions 的 cron 可能延迟 5-15 分钟触发，
-    所以留容错窗口容忍延迟。
-    """
-    if now_bj.hour != hour:
-        return False
-    return minute <= now_bj.minute < minute + PUSH_TOLERANCE_MIN
 
 
 def _flag_path(date_str, group_name):
