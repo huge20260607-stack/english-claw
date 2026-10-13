@@ -352,6 +352,7 @@ def run():
     # 2. 定时触发：扫描所有群，当前北京时间已到该群的推送时刻且当天没发过的 → 发
     #    这样即使 cron 延迟几小时，到下一次整点触发时也能补发当天还没发的群。
     due = []
+    skipped_dup = []  # 提前初始化，定时分支和发送分支都要用
     date_str_now = now_bj.strftime("%Y-%m-%d")
     if FORCE_SEND:
         for t in targets:
@@ -396,7 +397,7 @@ def run():
     # ── 逐群发送（带去重：检查当天是否已发过）──────────────────
     # 即使 FORCE_SEND=true 也检查去重，防止手动补发后 cron 触发重复发
     date_str = now_bj.strftime("%Y-%m-%d")
-    sent_to, failed, skipped_dup = [], [], []
+    sent_to, failed = [], []
     for t in due:
         if _already_sent(date_str, t["name"]):
             skipped_dup.append(t["name"])
