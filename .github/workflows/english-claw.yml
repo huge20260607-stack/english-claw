@@ -52,7 +52,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Restore sent-flags cache
+      - name: Cache sent-flags
         uses: actions/cache@v4
         with:
           path: .sent-flags
@@ -74,10 +74,3 @@ jobs:
           FORCE_SEND: ${{ github.event.inputs.force_send || '0' }}
           FORCE_TARGET: ${{ github.event.inputs.force_target || '' }}
         run: python index.py
-
-      - name: Save sent-flags cache
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: .sent-flags
-          key: sent-flags-${{ github.run_id }}
