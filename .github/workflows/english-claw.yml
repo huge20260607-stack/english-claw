@@ -52,11 +52,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Cache sent-flags
-        uses: actions/cache@v4
+      - name: Restore sent-flags cache
+        uses: actions/cache/restore@v4
         with:
           path: .sent-flags
-          key: sent-flags-${{ github.run_id }}
+          key: sent-flags-restore
           restore-keys: |
             sent-flags-
 
@@ -66,6 +66,7 @@ jobs:
           python-version: '3.12'
 
       - name: Run English Claw
+        id: run-claw
         env:
           TARGETS: ${{ secrets.TARGETS }}
           WORDS_PER_DAY: '5'
@@ -73,4 +74,11 @@ jobs:
           SHOW_HINTS: '1'
           FORCE_SEND: ${{ github.event.inputs.force_send || '0' }}
           FORCE_TARGET: ${{ github.event.inputs.force_target || '' }}
-        run: python index.py
+        run: python index.py || true
+
+      - name: Always save sent-flags cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .sent-flags
+          key: sent-flags-${{ github.run_id }}
